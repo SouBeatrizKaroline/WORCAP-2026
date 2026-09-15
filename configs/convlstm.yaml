@@ -1,0 +1,17 @@
+# Hiperparametros do Modelo B (ConvLSTM) - dono: P3
+# Ajustar na Fase 3 do PLANO_TRABALHO.md; registrar cada rodada em experiments/.
+
+data:
+  hindcast_len: 12 # meses de historico usados pelo encoder
+  spatial_downsample: 1 # 1 = resolucao cheia (301x261); aumentar se nao couber na GPU
+
+model:
+  hidden_channels: 32
+  num_layers: 2
+  kernel_size: 3
+
+train:
+  learning_rate: 0.001
+  batch_size: 8
+  epochs: 50
+  seed: 42

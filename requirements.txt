@@ -4,3 +4,6 @@ xarray
 netCDF4
 matplotlib
 jupyterlab
+torch
+scikit-learn
+pyyaml

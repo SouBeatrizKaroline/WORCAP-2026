@@ -1,0 +1,17 @@
+# Hiperparametros do Modelo A (PCA/EOF + LSTM) - dono: P2
+# Ajustar na Fase 3 do PLANO_TRABALHO.md; registrar cada rodada em experiments/.
+
+data:
+  hindcast_len: 12 # meses de historico usados pelo encoder
+  n_components_pca: 75 # por variavel
+
+model:
+  hidden_size: 128
+  num_layers: 2
+  dropout: 0.1
+
+train:
+  learning_rate: 0.001
+  batch_size: 64
+  epochs: 50
+  seed: 42
