@@ -1,5 +1,14 @@
 # WORCAP 2026 — Previsão Climática de Precipitação sobre a América do Sul
 
+Repositório para o Hackathon WORCAP 2026
+
+Membros da equipe:
+
+- Tomáz Antonio Bortoletto Giansante
+-
+-
+-
+
 Código para baixar e carregar os dados da competição Kaggle
 [previsao-climatica-de-precipitacao-sobre-a-america-do-sul](https://kaggle.com/competitions/previsao-climatica-de-precipitacao-sobre-a-america-do-sul).
 
@@ -39,6 +48,8 @@ Código para baixar e carregar os dados da competição Kaggle
 
 ## Uso
 
+### 1. Baixar e carregar os dados
+
 ```bash
 python3 download_data.py
 ```
@@ -51,3 +62,33 @@ O script:
 
 Os dados não ficam no repositório (são grandes e cada pessoa baixa a própria cópia
 com o token individual do Kaggle).
+
+### 2. Análise exploratória (estatísticas)
+
+```bash
+python3 eda.py
+```
+
+Calcula, para cada variável: min, max, média, desvio-padrão e % de dados faltantes,
+além da correlação entre variáveis (usando a média espacial de cada uma por mês).
+Salva os resumos em `eda_output/` (CSV, não versionado — cada pessoa regenera o próprio).
+
+> **Atenção:** média/desvio são calculados forçando `dtype="float64"`. O `xarray`
+> (via `bottleneck`) tem um bug de precisão numérica ao reduzir arrays `float32`
+> grandes (dezenas de milhões de pontos) — sem o float64 explícito, a média de uma
+> variável cujo range real era 252–308 aparecia como 109. Se for calcular estatísticas
+> manualmente sobre os `.nc`, sempre passe `dtype="float64"` em `.mean()`/`.std()`.
+
+### 3. Gráficos
+
+```bash
+jupyter lab eda.ipynb
+```
+
+O notebook `eda.ipynb` reaproveita as funções de `download_data.py` e `eda.py` (lendo o
+cache de `eda_output/` quando disponível) e plota:
+- barras de % de dados faltantes por variável;
+- heatmap de correlação entre variáveis;
+- séries temporais anuais (precipitação, temperatura, cobertura de nuvens);
+- histograma da distribuição de `tp_alvo`;
+- mapas espaciais (média no tempo) de `tp_alvo` e `t2` sobre a América do Sul.

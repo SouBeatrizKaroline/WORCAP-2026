@@ -8,6 +8,9 @@ data/
 *.nc
 *.csv
 
+# Resumos gerados por eda.py (derivados, cada um regenera localmente)
+eda_output/
+
 # Python
 __pycache__/
 *.pyc

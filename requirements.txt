@@ -2,3 +2,5 @@ kagglehub
 pandas
 xarray
 netCDF4
+matplotlib
+jupyterlab
