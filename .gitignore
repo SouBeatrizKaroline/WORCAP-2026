@@ -1,0 +1,25 @@
+# Credenciais do Kaggle - NUNCA versionar
+kaggle.json
+access_token
+.kaggle/
+
+# Dados baixados (grandes, cada um baixa localmente com o próprio script)
+data/
+*.nc
+*.csv
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+env/
+*.egg-info/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Editor / SO
+.vscode/
+.idea/
+.DS_Store
