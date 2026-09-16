@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import numpy as np
 import torch
+from sklearn.cross_decomposition import PLSRegression
 from sklearn.decomposition import PCA
 from torch import nn
 
@@ -41,6 +42,52 @@ class SpatialPCA:
 
     def explained_variance_ratio(self) -> float:
         return float(self._pca.explained_variance_ratio_.sum())
+
+
+class SpatialPLS:
+    """Ajusta um PLS (Partial Least Squares) por variavel sobre a dimensao espacial
+    (lat*lon), usando so o treino.
+
+    Diferenca em relacao ao SpatialPCA: o PCA e nao-supervisionado (maximiza so a
+    variancia da propria variavel X). O PLS e supervisionado - precisa de um alvo
+    Y no fit e escolhe os componentes que maximizam a covariancia entre X e Y. Aqui
+    Y e sempre a serie de componentes PCA de `tp` (concorrente ou defasada no tempo),
+    entao os componentes capturam a parte de cada variavel atmosferica mais ligada a
+    precipitacao, em vez de so a parte de maior variancia espacial.
+    """
+
+    def __init__(self, n_components: int):
+        self.n_components = n_components
+        self._pls = PLSRegression(n_components=n_components, scale=False)
+        self.spatial_shape: tuple[int, int] | None = None
+        self._x_total_var: float | None = None
+
+    def fit(self, data: np.ndarray, target: np.ndarray) -> "SpatialPLS":
+        """`data` com shape (tempo, lat, lon); `target` com shape (tempo, n_componentes_alvo),
+        ja alinhados no tempo (ver alinhamento do lag em src/train_pca_lstm.py)."""
+        self.spatial_shape = data.shape[1:]
+        flat = data.reshape(data.shape[0], -1)
+        self._pls.fit(flat, target)
+        self._x_total_var = float(np.var(flat, axis=0).sum())
+        return self
+
+    def transform(self, data: np.ndarray) -> np.ndarray:
+        """`data` com shape (tempo, lat, lon) -> (tempo, n_components)."""
+        flat = data.reshape(data.shape[0], -1)
+        return self._pls.transform(flat)
+
+    def inverse_transform(self, coeffs: np.ndarray) -> np.ndarray:
+        """`coeffs` com shape (tempo, n_components) -> (tempo, lat, lon)."""
+        flat = self._pls.inverse_transform(coeffs)
+        return flat.reshape(coeffs.shape[0], *self.spatial_shape)
+
+    def explained_variance_ratio(self) -> float:
+        """Fracao da variancia de X (nao de Y) capturada pelos scores do PLS -
+        calculada so para ficar comparavel com SpatialPCA.explained_variance_ratio()
+        (o PLS nao otimiza para essa quantidade, entao ela tende a ser menor que a
+        do PCA com o mesmo numero de componentes)."""
+        scores_var = float(np.var(self._pls.x_scores_, axis=0).sum())
+        return scores_var / self._x_total_var
 
 
 class HindcastForecastLSTM(nn.Module):
