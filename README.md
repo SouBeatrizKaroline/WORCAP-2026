@@ -12,6 +12,61 @@ Membros da equipe:
 Código para baixar e carregar os dados da competição Kaggle
 [previsao-climatica-de-precipitacao-sobre-a-america-do-sul](https://kaggle.com/competitions/previsao-climatica-de-precipitacao-sobre-a-america-do-sul).
 
+## Estrutura do repositório
+
+### Documentação
+
+- `PLANO_TRABALHO.md` — esquema de trabalho do time: papéis, fases, contrato de
+  dados combinado (origem + lag) e cronograma.
+- `PESQUISA_LSTM_XGBOOST.md` — notas de pesquisa sobre um ensemble LSTM+XGBoost,
+  anomalias climáticas e índices SPI/SPEI, com uma seção explícita sobre o que
+  precisa ser adaptado antes de usar essas ideias no formato real da competição.
+
+### Scripts na raiz
+
+- `download_data.py` — baixa (via `kagglehub`, com cache local) e carrega os
+  `.csv`/`.nc` da competição.
+- `eda.py` — estatísticas por variável (min/max/média/desvio-padrão/% de dados
+  faltantes) e correlação entre variáveis; salva os resumos em `eda_output/`.
+- `eda.ipynb` — gráficos da análise exploratória (reaproveita `download_data.py`
+  e `eda.py`).
+- `resultados_pca_lstm.ipynb` — visualiza os resultados de treino do modelo
+  PCA+LSTM (curvas de treino, comparação com os baselines, erro por horizonte de
+  previsão, mapas espaciais de exemplo); lê os artefatos salvos em
+  `experiments/pca_lstm_run1/`, sem reprocessar os dados nem re-treinar.
+
+### Pipeline de modelagem (`src/`)
+
+- `src/data.py` — pipeline de dados compartilhado: carregamento/alinhamento da
+  grade (lat/lon/tempo), normalização (z-score no período de treino) e
+  `build_examples` (monta os exemplos seguindo o contrato origem + lag).
+- `src/baseline.py` — baselines de comparação: persistência (repete a última
+  observação real) e climatologia (média histórica por mês do calendário).
+- `src/evaluate.py` — métricas de avaliação (RMSE/MAE, com quebra por horizonte
+  de previsão).
+- `src/submit.py` — formata a previsão final no formato exigido pelo Kaggle
+  (arquivos em `submissions/`).
+- `src/train_pca_lstm.py` — script principal do **Modelo A**: ajusta PCA por
+  variável, treina o LSTM hindcast/forecast com validação interna (early
+  stopping), compara com os baselines, retreina com todo o histórico rotulado
+  e gera a submissão real.
+- `src/models/pca_lstm.py` — arquitetura do Modelo A: `SpatialPCA` (redução
+  espacial da grade via PCA) e `HindcastForecastLSTM` (encoder LSTM + decoder
+  condicionado no mês alvo, na última observação real e no lag).
+- `src/models/convlstm.py` — esqueleto do **Modelo B** (ConvLSTM), ainda por
+  implementar.
+
+### Configuração e resultados (gerados, não totalmente versionados)
+
+- `configs/pca_lstm.yaml`, `configs/convlstm.yaml` — hiperparâmetros de cada
+  modelo.
+- `experiments/` — artefatos de cada rodada de treino (histórico de épocas,
+  métricas, grades de amostra ficam versionados; checkpoints de modelo e
+  objetos PCA não — ver `.gitignore`).
+- `submissions/` — arquivos de submissão gerados por `src/submit.py` (não
+  versionado; cada pessoa gera o próprio ao rodar o treino).
+- `eda_output/` — resumos gerados por `eda.py` (não versionado, ver seção 2 de "Uso").
+
 ## Setup (rodar uma vez por máquina)
 
 1. Instale as dependências:
