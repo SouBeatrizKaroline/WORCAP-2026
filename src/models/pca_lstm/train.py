@@ -85,6 +85,7 @@ LR = 1e-3
 BATCH_SIZE = 64
 MAX_EPOCHS = 25
 PATIENCE = 5
+SEED = 42  # mesma seed do random_state do SpatialPCA, por consistencia
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 REDUCTION_METHODS = ("pca", "pls_concurrent", "pls_lagged")
@@ -341,6 +342,7 @@ def main(
     dropout: float = DROPOUT,
     lr: float = LR,
     n_jobs: int = N_JOBS_REDUCTION,
+    seed: int = SEED,
 ):
     """Ponto de entrada publico: prepara a pasta do run e loga tudo (console + arquivo)
     em `{run_dir}/train.log`, alem de delegar o treino de fato para `_train`.
@@ -349,7 +351,9 @@ def main(
     reducao), mas pode ser sobrescrito para nao colidir quando varias execucoes do
     mesmo metodo rodam com hiperparametros diferentes (ver run_hparam_sweep.py).
     `n_jobs` controla o paralelismo do ajuste das variaveis atmosfericas (Passo 2) -
-    ver fit_reduction_per_variable."""
+    ver fit_reduction_per_variable. `seed` fixa a inicializacao dos pesos do LSTM e o
+    shuffle do DataLoader (nao fixados antes - cada rodada dava um RMSE levemente
+    diferente mesmo com os mesmos dados/hiperparametros)."""
     assert method in REDUCTION_METHODS, f"method invalido: {method} (esperado um de {REDUCTION_METHODS})"
     run_dir = run_dir or RUN_DIRS[method]
     os.makedirs(run_dir, exist_ok=True)
@@ -357,7 +361,7 @@ def main(
     log_path = f"{run_dir}/train.log"
     with open(log_path, "a") as log_file, contextlib.redirect_stdout(_Tee(sys.stdout, log_file)):
         print(f"\n{'=' * 70}\nnova execucao ({method}) em {pd.Timestamp.now()}\n{'=' * 70}")
-        return _train(method, pls_lag_shift, run_dir, hidden_size, dropout, lr, n_jobs)
+        return _train(method, pls_lag_shift, run_dir, hidden_size, dropout, lr, n_jobs, seed)
 
 
 def _train(
@@ -368,14 +372,21 @@ def _train(
     dropout: float = DROPOUT,
     lr: float = LR,
     n_jobs: int = N_JOBS_REDUCTION,
+    seed: int = SEED,
 ):
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+
     label_modelo = {
         "pca": "PCA+LSTM",
         "pls_concurrent": "PLS(concorrente)+LSTM",
         "pls_lagged": "PLS(defasado)+LSTM",
     }[method]
 
-    print(f"=== 0. Metodo de reducao dimensional: {method} | hiperparametros: hidden_size={hidden_size} dropout={dropout} lr={lr} ===")
+    print(
+        f"=== 0. Metodo de reducao dimensional: {method} | seed: {seed} | "
+        f"hiperparametros: hidden_size={hidden_size} dropout={dropout} lr={lr} ==="
+    )
 
     print("=== 1. Carregando dados ===")
     datasets = load_all_datasets()
@@ -629,6 +640,13 @@ def parse_args() -> argparse.Namespace:
         "%(default)s = todos os nucleos, convencao do joblib). Reduza se faltar memoria "
         "(cada worker mantem sua propria copia da grade normalizada, ~313MB).",
     )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=SEED,
+        help="Seed do torch/numpy (inicializacao dos pesos do LSTM e shuffle do DataLoader), "
+        "para o treino ser reprodutivel entre execucoes (padrao: %(default)s).",
+    )
     return parser.parse_args()
 
 
@@ -642,4 +660,5 @@ if __name__ == "__main__":
         dropout=args.dropout,
         lr=args.lr,
         n_jobs=args.n_jobs,
+        seed=args.seed,
     )
