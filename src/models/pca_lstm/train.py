@@ -7,6 +7,9 @@ Uso (a partir da raiz do repositorio):
     python3 -m src.models.pca_lstm.train --lr 5e-4 --hidden-size 256 --dropout 0.3 --run-dir models/meu_run
         # hiperparametros do LSTM (--lr, --hidden-size, --dropout); --run-dir evita
         # sobrescrever outra execucao do mesmo --reduction (ver run_hparam_sweep.py)
+    python3 -m src.models.pca_lstm.train --n-jobs 2
+        # limita o paralelismo do ajuste das variaveis atmosfericas (padrao: todos os
+        # nucleos) - reduza se faltar memoria (ver fit_reduction_per_variable)
 
 Passos:
     1. Carrega os dados de treino (.nc, cache local do kagglehub) e do teste real.
@@ -63,8 +66,19 @@ from src.models.pca_lstm import HindcastForecastLSTM, SpatialPCA, SpatialPLS
 from src.submit import build_submission
 
 VARIANCE_THRESHOLD = 0.90  # criterio de contribuicao minima: mantem o menor n_components que atinja isso
-PCA_MAX_COMPONENTS = 200  # teto de busca para SpatialPCA (ver SpatialPCA em src/models/pca_lstm.py)
-PLS_MAX_COMPONENTS = 100  # teto de busca (binaria) para SpatialPLS
+PCA_MAX_COMPONENTS = 200  # teto de busca para SpatialPCA (barato: SVD randomizada, nao iterativo)
+# Teto de busca (binaria) e max_iter por fit para SpatialPLS - mantidos baixos porque o alvo Y (os
+# componentes de tp) agora tem ate ~85 colunas (criterio de 90% aplicado tambem ao tp), o que deixa
+# cada fit do PLS bem mais caro que antes (Y multi-coluna exige mais iteracoes do NIPALS para
+# convergir); um teto de 100 chegou a deixar um unico fit rodando por horas - ver conversa.
+PLS_MAX_COMPONENTS = 30
+PLS_MAX_ITER = 100
+# Paralelismo do ajuste das variaveis atmosfericas (Passo 2): -1 = usa todos os nucleos
+# disponiveis (convencao do joblib). Cada worker e um PROCESSO separado (nao thread) -
+# o trabalho e numpy/sklearn puro (CPU-bound), entao processos aproveitam nucleos de
+# verdade em vez de esbarrar no GIL. Ajustavel via --n-jobs se a memoria for um problema
+# (cada worker mantem sua propria copia da grade normalizada, ~313MB em float32).
+N_JOBS_REDUCTION = -1
 HIDDEN_SIZE = 128
 DROPOUT = 0.1
 LR = 1e-3
@@ -99,12 +113,51 @@ class _Tee:
             s.flush()
 
 
+def _fit_one_atm_variable(
+    var: str,
+    normalizado: np.ndarray,
+    method: str,
+    train_end_idx: int,
+    pls_lag_shift: int,
+    tp_components_full: np.ndarray,
+) -> tuple[str, SpatialPCA | SpatialPLS, np.ndarray, str]:
+    """Ajusta e transforma uma variavel atmosferica - e o "worker" despachado em paralelo
+    por `fit_reduction_per_variable` (um processo por variavel, via joblib).
+
+    Recebe so arrays numpy simples (nunca o `xr.Dataset`/`ds`): objetos xarray com backend
+    lazy de netCDF nao sao seguros/eficientes de serializar entre processos, entao a leitura
+    do disco (`ds[var].values`) e a normalizacao continuam no processo principal - so a parte
+    cara (fit do PCA/PLS) e que roda em paralelo. A mensagem de log e retornada (em vez de
+    impressa aqui) porque um `print` dentro do worker nao passa pelo `_Tee`/`train.log` do
+    processo principal.
+    """
+    if method == "pca":
+        reducer = SpatialPCA(variance_threshold=VARIANCE_THRESHOLD, max_components=PCA_MAX_COMPONENTS)
+        reducer.fit(normalizado[: train_end_idx + 1])
+    else:
+        shift = pls_lag_shift if method == "pls_lagged" else 0
+        x_fit = normalizado[: train_end_idx + 1 - shift]
+        y_fit = tp_components_full[shift : train_end_idx + 1]
+        reducer = SpatialPLS(
+            variance_threshold=VARIANCE_THRESHOLD, max_components=PLS_MAX_COMPONENTS, max_iter=PLS_MAX_ITER
+        )
+        reducer.fit(x_fit, y_fit)
+
+    componentes = reducer.transform(normalizado).astype("float32")
+    log_msg = (
+        f"  {method.upper()}[{var}]: {reducer.n_components_} componentes explicam "
+        f"{reducer.explained_variance_ratio():.1%} da variancia de X (treino interno)"
+    )
+    return var, reducer, componentes, log_msg
+
+
 def fit_reduction_per_variable(
     ds: xr.Dataset,
     stats: dict,
     train_end_idx: int,
     method: str = "pca",
     pls_lag_shift: int = PLS_LAG_SHIFT,
+    n_jobs: int = N_JOBS_REDUCTION,
 ) -> tuple[dict, dict]:
     """Normaliza e reduz cada variavel (ajustado so no periodo de treino interno).
 
@@ -115,9 +168,17 @@ def fit_reduction_per_variable(
     t+pls_lag_shift (o PLS busca a parte de cada variavel mais ligada a
     precipitacao futura, nao so a de maior variancia espacial).
 
-    Processa uma variavel por vez para nao manter todas as grades normalizadas na
-    memoria ao mesmo tempo (a grade tem 301x261 pontos, ~313MB em float32 por
-    variavel completa).
+    `tp` e ajustado primeiro, sequencialmente (as variantes PLS dependem dos
+    componentes dele como alvo Y). As `FEATURE_VARS` sao independentes entre si -
+    o ajuste de cada uma roda em paralelo (`n_jobs` processos via joblib,
+    `_fit_one_atm_variable`), o que passa a valer a pena conforme mais dados
+    entrarem no pipeline (mais variaveis e/ou grades maiores).
+
+    O despacho e "preguicoso" (generator + `pre_dispatch="n_jobs"`): a leitura/
+    normalizacao de cada variavel so acontece pouco antes dela ser enviada a um
+    worker livre, entao no maximo ~n_jobs grades normalizadas ficam na memoria ao
+    mesmo tempo (nao as 9 de uma vez) - grade tem 301x261 pontos, ~313MB em
+    float32 por variavel completa.
     """
     assert method in REDUCTION_METHODS, f"method invalido: {method}"
 
@@ -141,30 +202,22 @@ def fit_reduction_per_variable(
     reduction_objects[TP_VAR] = pca_tp
     component_series[TP_VAR] = tp_components_full
 
-    for var in FEATURE_VARS:
-        media, desvio = stats[var]
-        bruto = ds[var].values.astype("float32")
-        normalizado = (bruto - media) / desvio
-        del bruto
+    def _tarefas():
+        for var in FEATURE_VARS:
+            media, desvio = stats[var]
+            bruto = ds[var].values.astype("float32")
+            normalizado = (bruto - media) / desvio
+            del bruto
+            yield joblib.delayed(_fit_one_atm_variable)(
+                var, normalizado, method, train_end_idx, pls_lag_shift, tp_components_full
+            )
 
-        if method == "pca":
-            reducer = SpatialPCA(variance_threshold=VARIANCE_THRESHOLD, max_components=PCA_MAX_COMPONENTS)
-            reducer.fit(normalizado[: train_end_idx + 1])
-        else:
-            shift = pls_lag_shift if method == "pls_lagged" else 0
-            x_fit = normalizado[: train_end_idx + 1 - shift]
-            y_fit = tp_components_full[shift : train_end_idx + 1]
-            reducer = SpatialPLS(variance_threshold=VARIANCE_THRESHOLD, max_components=PLS_MAX_COMPONENTS)
-            reducer.fit(x_fit, y_fit)
+    resultados = joblib.Parallel(n_jobs=n_jobs, pre_dispatch="n_jobs")(_tarefas())
 
-        print(
-            f"  {method.upper()}[{var}]: {reducer.n_components_} componentes explicam "
-            f"{reducer.explained_variance_ratio():.1%} da variancia de X (treino interno)"
-        )
-
-        component_series[var] = reducer.transform(normalizado).astype("float32")
+    for var, reducer, componentes, log_msg in resultados:
+        print(log_msg)
         reduction_objects[var] = reducer
-        del normalizado
+        component_series[var] = componentes
 
     return reduction_objects, component_series
 
@@ -287,13 +340,16 @@ def main(
     hidden_size: int = HIDDEN_SIZE,
     dropout: float = DROPOUT,
     lr: float = LR,
+    n_jobs: int = N_JOBS_REDUCTION,
 ):
     """Ponto de entrada publico: prepara a pasta do run e loga tudo (console + arquivo)
     em `{run_dir}/train.log`, alem de delegar o treino de fato para `_train`.
 
     `run_dir` e opcional: por padrao usa RUN_DIRS[method] (um run por metodo de
     reducao), mas pode ser sobrescrito para nao colidir quando varias execucoes do
-    mesmo metodo rodam com hiperparametros diferentes (ver run_hparam_sweep.py)."""
+    mesmo metodo rodam com hiperparametros diferentes (ver run_hparam_sweep.py).
+    `n_jobs` controla o paralelismo do ajuste das variaveis atmosfericas (Passo 2) -
+    ver fit_reduction_per_variable."""
     assert method in REDUCTION_METHODS, f"method invalido: {method} (esperado um de {REDUCTION_METHODS})"
     run_dir = run_dir or RUN_DIRS[method]
     os.makedirs(run_dir, exist_ok=True)
@@ -301,10 +357,18 @@ def main(
     log_path = f"{run_dir}/train.log"
     with open(log_path, "a") as log_file, contextlib.redirect_stdout(_Tee(sys.stdout, log_file)):
         print(f"\n{'=' * 70}\nnova execucao ({method}) em {pd.Timestamp.now()}\n{'=' * 70}")
-        return _train(method, pls_lag_shift, run_dir, hidden_size, dropout, lr)
+        return _train(method, pls_lag_shift, run_dir, hidden_size, dropout, lr, n_jobs)
 
 
-def _train(method: str, pls_lag_shift: int, run_dir: str, hidden_size: int = HIDDEN_SIZE, dropout: float = DROPOUT, lr: float = LR):
+def _train(
+    method: str,
+    pls_lag_shift: int,
+    run_dir: str,
+    hidden_size: int = HIDDEN_SIZE,
+    dropout: float = DROPOUT,
+    lr: float = LR,
+    n_jobs: int = N_JOBS_REDUCTION,
+):
     label_modelo = {
         "pca": "PCA+LSTM",
         "pls_concurrent": "PLS(concorrente)+LSTM",
@@ -328,7 +392,7 @@ def _train(method: str, pls_lag_shift: int, run_dir: str, hidden_size: int = HID
     print(f"\n=== 2. Reduzindo dimensionalidade por variavel ({method}, so no treino interno) ===")
     tp_raw = ds[TP_VAR].values.astype("float32").copy()
     reduction_objects, component_series = fit_reduction_per_variable(
-        ds, stats, train_end_idx, method=method, pls_lag_shift=pls_lag_shift
+        ds, stats, train_end_idx, method=method, pls_lag_shift=pls_lag_shift, n_jobs=n_jobs
     )
 
     n_components_tp = reduction_objects[TP_VAR].n_components_
@@ -557,6 +621,14 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--dropout", type=float, default=DROPOUT, help="Dropout do decoder (padrao: %(default)s).")
     parser.add_argument("--lr", type=float, default=LR, help="Taxa de aprendizado do Adam (padrao: %(default)s).")
+    parser.add_argument(
+        "--n-jobs",
+        type=int,
+        default=N_JOBS_REDUCTION,
+        help="Processos paralelos para ajustar as variaveis atmosfericas no Passo 2 (padrao: "
+        "%(default)s = todos os nucleos, convencao do joblib). Reduza se faltar memoria "
+        "(cada worker mantem sua propria copia da grade normalizada, ~313MB).",
+    )
     return parser.parse_args()
 
 
@@ -569,4 +641,5 @@ if __name__ == "__main__":
         hidden_size=args.hidden_size,
         dropout=args.dropout,
         lr=args.lr,
+        n_jobs=args.n_jobs,
     )

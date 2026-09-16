@@ -89,16 +89,21 @@ class SpatialPLS:
     variancia capturada).
     """
 
-    def __init__(self, variance_threshold: float = 0.90, max_components: int = 100):
+    def __init__(self, variance_threshold: float = 0.90, max_components: int = 30, max_iter: int = 100):
         self.variance_threshold = variance_threshold
         self.max_components = max_components
+        # sklearn usa NIPALS por padrao (max_iter=500): cada componente itera entre X e Y ate
+        # convergir, e com Y multi-coluna (aqui, os componentes de tp) isso pode ficar bem lento -
+        # reduzido pra nao deixar um fit individual rodar por muito tempo (ver conversa: com Y de
+        # 85 colunas e max_components=100, um unico fit chegou a levar horas).
+        self.max_iter = max_iter
         self._pls: PLSRegression | None = None
         self.n_components_: int | None = None
         self.spatial_shape: tuple[int, int] | None = None
         self._x_total_var: float | None = None
 
     def _fit_at(self, flat: np.ndarray, target: np.ndarray, k: int) -> tuple[PLSRegression, float]:
-        pls = PLSRegression(n_components=k, scale=False)
+        pls = PLSRegression(n_components=k, scale=False, max_iter=self.max_iter)
         pls.fit(flat, target)
         ratio = float(np.var(pls.x_scores_, axis=0).sum()) / self._x_total_var
         return pls, ratio
