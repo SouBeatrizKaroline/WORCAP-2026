@@ -18,9 +18,11 @@ Passos:
 from __future__ import annotations
 
 import copy
+import json
 import os
 import time
 
+import joblib
 import numpy as np
 import pandas as pd
 import torch
@@ -54,6 +56,7 @@ BATCH_SIZE = 64
 MAX_EPOCHS = 25
 PATIENCE = 5
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+RUN_DIR = "experiments/pca_lstm_run1"
 
 
 def fit_pca_per_variable(ds: xr.Dataset, stats: dict, train_end_idx: int) -> tuple[dict, dict]:
@@ -112,6 +115,7 @@ def train_model(train_loader, val_loader, n_features_hindcast, n_features_atm, n
     best_state = None
     best_epoch = 0
     epochs_sem_melhora = 0
+    history = []
 
     for epoch in range(1, max_epochs + 1):
         model.train()
@@ -145,6 +149,7 @@ def train_model(train_loader, val_loader, n_features_hindcast, n_features_atm, n
         val_loss /= n_val
 
         print(f"  epoca {epoch:2d}/{max_epochs} | treino MSE(pca) {train_loss:.4f} | val MSE(pca) {val_loss:.4f}")
+        history.append({"epoch": epoch, "train_mse_pca": train_loss, "val_mse_pca": val_loss})
 
         if val_loss < best_val_loss:
             best_val_loss = val_loss
@@ -158,7 +163,7 @@ def train_model(train_loader, val_loader, n_features_hindcast, n_features_atm, n
                 break
 
     model.load_state_dict(best_state)
-    return model, best_epoch, best_val_loss
+    return model, best_epoch, best_val_loss, history
 
 
 def reconstruct_tp(pca_tp: SpatialPCA, stats_tp: tuple[float, float], coeffs_norm_pca: np.ndarray) -> np.ndarray:
@@ -199,7 +204,7 @@ def main():
 
     print("\n=== 4. Treinando (selecao de epocas via validacao interna) ===")
     t0 = time.time()
-    model, best_epoch, best_val_loss = train_model(
+    model, best_epoch, best_val_loss, history = train_model(
         train_loader, val_loader, n_features_hindcast, n_features_atm, N_COMPONENTS, MAX_EPOCHS, PATIENCE
     )
     print(f"  treino concluido em {time.time() - t0:.0f}s | melhor epoca: {best_epoch} | val MSE(pca): {best_val_loss:.4f}")
@@ -220,13 +225,47 @@ def main():
     meses_alvo = time_index.month.values[alvo_va]
     clim_grid = climatology_baseline(ds[TP_VAR].sel(time=slice(None, TRAIN_END)), list(meses_alvo))
 
-    metrics_model = evaluate_predictions(true_grid, pred_grid, lags=(lag_va * max(LAGS)).round().astype(int))
-    metrics_persist = evaluate_predictions(true_grid, persist_grid)
-    metrics_clim = evaluate_predictions(true_grid, clim_grid)
+    lag_inteiro_va = (lag_va * max(LAGS)).round().astype(int)
+    metrics_model = evaluate_predictions(true_grid, pred_grid, lags=lag_inteiro_va)
+    metrics_persist = evaluate_predictions(true_grid, persist_grid, lags=lag_inteiro_va)
+    metrics_clim = evaluate_predictions(true_grid, clim_grid, lags=lag_inteiro_va)
 
     print(f"  PCA+LSTM      RMSE={metrics_model['rmse']:.3f}  MAE={metrics_model['mae']:.3f}  (mm/dia)")
     print(f"  Persistencia  RMSE={metrics_persist['rmse']:.3f}  MAE={metrics_persist['mae']:.3f}  (mm/dia)")
     print(f"  Climatologia  RMSE={metrics_clim['rmse']:.3f}  MAE={metrics_clim['mae']:.3f}  (mm/dia)")
+
+    print("\n=== 5b. Salvando artefatos para visualizacao (experiments/) ===")
+    os.makedirs(RUN_DIR, exist_ok=True)
+
+    pd.DataFrame(history).to_csv(f"{RUN_DIR}/history.csv", index=False)
+
+    with open(f"{RUN_DIR}/metrics.json", "w") as f:
+        json.dump(
+            {
+                "best_epoch": best_epoch,
+                "best_val_loss_pca": best_val_loss,
+                "modelo": metrics_model,
+                "persistencia": metrics_persist,
+                "climatologia": metrics_clim,
+            },
+            f,
+            indent=2,
+        )
+
+    # Grades de amostra (para mapas espaciais) - uma por lag representativo
+    lags_amostra = [l for l in [1, 3, 6, 12, 18, 24] if l in lag_inteiro_va]
+    amostras = {"lat": ds["lat"].values, "lon": ds["lon"].values, "lags": np.array(lags_amostra)}
+    for nome, grade in [("true", true_grid), ("pred", pred_grid), ("persist", persist_grid), ("clim", clim_grid)]:
+        escolhidas = [grade[np.where(lag_inteiro_va == l)[0][0]] for l in lags_amostra]
+        amostras[nome] = np.stack(escolhidas)
+    amostras["origin_date"] = np.array(
+        [str(time_index[origin_va[np.where(lag_inteiro_va == l)[0][0]]].date()) for l in lags_amostra]
+    )
+    amostras["target_date"] = np.array(
+        [str(time_index[alvo_va[np.where(lag_inteiro_va == l)[0][0]]].date()) for l in lags_amostra]
+    )
+    np.savez_compressed(f"{RUN_DIR}/sample_grids.npz", **amostras)
+    print(f"  history.csv, metrics.json e sample_grids.npz salvos em {RUN_DIR}/")
 
     print("\n=== 6. Retreinando com todo o historico rotulado (1940-2022) ===")
     full_ex = build_examples(component_series, 0, last_valid_idx, last_valid_idx=last_valid_idx)
@@ -256,6 +295,10 @@ def main():
             epoch_loss += loss.item() * hindcast.size(0)
             n_seen += hindcast.size(0)
         print(f"  epoca {epoch:2d}/{best_epoch} | MSE(pca) {epoch_loss / n_seen:.4f}")
+
+    torch.save(final_model.state_dict(), f"{RUN_DIR}/model_final.pt")
+    joblib.dump({"pca_objects": pca_objects, "stats": stats}, f"{RUN_DIR}/pca_and_stats.joblib")
+    print(f"  modelo final e objetos PCA salvos em {RUN_DIR}/")
 
     print("\n=== 7. Prevendo o teste real (2023-2024) ===")
     teste_ds = datasets["teste_features"]
