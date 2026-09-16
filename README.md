@@ -5,8 +5,8 @@ Repositório para o Hackathon WORCAP 2026
 Membros da equipe:
 
 - Tomáz Antonio Bortoletto Giansante
--
--
+- Beatriz Karoline Cordeiro da Silva
+- Daiane Fonseca
 -
 
 Código para baixar e carregar os dados da competição Kaggle
