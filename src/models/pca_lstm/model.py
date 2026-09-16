@@ -16,18 +16,42 @@ from torch import nn
 
 
 class SpatialPCA:
-    """Ajusta um PCA por variavel sobre a dimensao espacial (lat*lon), usando so o treino."""
+    """Ajusta um PCA por variavel sobre a dimensao espacial (lat*lon), usando so o treino.
 
-    def __init__(self, n_components: int):
-        self.n_components = n_components
-        self._pca = PCA(n_components=n_components, svd_solver="randomized", random_state=42)
+    O numero de componentes nao e fixo: e escolhido automaticamente como o menor
+    que atinge `variance_threshold` da variancia de X (criterio de contribuicao
+    minima), ate um teto de `max_components` (guarda de custo/tempo - se nem
+    `max_components` bastar, usa esse teto e avisa)."""
+
+    def __init__(self, variance_threshold: float = 0.90, max_components: int = 200, random_state: int = 42):
+        self.variance_threshold = variance_threshold
+        self.max_components = max_components
+        self.random_state = random_state
+        self._pca: PCA | None = None
+        self.n_components_: int | None = None
         self.spatial_shape: tuple[int, int] | None = None
 
     def fit(self, data: np.ndarray) -> "SpatialPCA":
         """`data` com shape (tempo, lat, lon)."""
         self.spatial_shape = data.shape[1:]
         flat = data.reshape(data.shape[0], -1)
-        self._pca.fit(flat)
+
+        cap = min(self.max_components, flat.shape[0] - 1, flat.shape[1])
+        probe = PCA(n_components=cap, svd_solver="randomized", random_state=self.random_state)
+        probe.fit(flat)
+        cumulative = np.cumsum(probe.explained_variance_ratio_)
+
+        if cumulative[-1] < self.variance_threshold:
+            print(
+                f"    aviso: nao atingiu {self.variance_threshold:.0%} de variancia mesmo com "
+                f"max_components={cap} (alcancado: {cumulative[-1]:.1%}); usando {cap} componentes"
+            )
+            self.n_components_ = cap
+            self._pca = probe
+        else:
+            self.n_components_ = int(np.searchsorted(cumulative, self.variance_threshold)) + 1
+            self._pca = PCA(n_components=self.n_components_, svd_solver="randomized", random_state=self.random_state)
+            self._pca.fit(flat)
         return self
 
     def transform(self, data: np.ndarray) -> np.ndarray:
@@ -54,21 +78,60 @@ class SpatialPLS:
     Y e sempre a serie de componentes PCA de `tp` (concorrente ou defasada no tempo),
     entao os componentes capturam a parte de cada variavel atmosferica mais ligada a
     precipitacao, em vez de so a parte de maior variancia espacial.
+
+    O sklearn nao expõe a variancia de X explicada por k componentes num unico fit
+    (como o PCA faz via `explained_variance_ratio_`), entao o numero de componentes
+    e escolhido testando varios valores de k ("permutacoes"): busca binaria pelo
+    menor k cuja fracao de variancia de X capturada pelos scores do PLS atinja
+    `variance_threshold`, ate um teto de `max_components`. A busca binaria e valida
+    porque essa fracao e nao-decrescente em k (cada componente extra do PLS e
+    calculado sobre o residuo de X apos deflacao dos anteriores, entao so acrescenta
+    variancia capturada).
     """
 
-    def __init__(self, n_components: int):
-        self.n_components = n_components
-        self._pls = PLSRegression(n_components=n_components, scale=False)
+    def __init__(self, variance_threshold: float = 0.90, max_components: int = 100):
+        self.variance_threshold = variance_threshold
+        self.max_components = max_components
+        self._pls: PLSRegression | None = None
+        self.n_components_: int | None = None
         self.spatial_shape: tuple[int, int] | None = None
         self._x_total_var: float | None = None
+
+    def _fit_at(self, flat: np.ndarray, target: np.ndarray, k: int) -> tuple[PLSRegression, float]:
+        pls = PLSRegression(n_components=k, scale=False)
+        pls.fit(flat, target)
+        ratio = float(np.var(pls.x_scores_, axis=0).sum()) / self._x_total_var
+        return pls, ratio
 
     def fit(self, data: np.ndarray, target: np.ndarray) -> "SpatialPLS":
         """`data` com shape (tempo, lat, lon); `target` com shape (tempo, n_componentes_alvo),
         ja alinhados no tempo (ver alinhamento do lag em src/train_pca_lstm.py)."""
         self.spatial_shape = data.shape[1:]
         flat = data.reshape(data.shape[0], -1)
-        self._pls.fit(flat, target)
         self._x_total_var = float(np.var(flat, axis=0).sum())
+
+        cap = min(self.max_components, flat.shape[0] - 1, flat.shape[1])
+        best_pls, best_ratio = self._fit_at(flat, target, cap)
+        best_k = cap
+
+        if best_ratio < self.variance_threshold:
+            print(
+                f"    aviso: PLS nao atingiu {self.variance_threshold:.0%} de variancia de X mesmo "
+                f"com max_components={cap} (alcancado: {best_ratio:.1%}); usando {cap} componentes"
+            )
+        else:
+            lo, hi = 1, cap
+            while lo < hi:
+                mid = (lo + hi) // 2
+                pls, ratio = self._fit_at(flat, target, mid)
+                if ratio >= self.variance_threshold:
+                    hi = mid
+                    best_pls, best_ratio, best_k = pls, ratio, mid
+                else:
+                    lo = mid + 1
+
+        self._pls = best_pls
+        self.n_components_ = best_k
         return self
 
     def transform(self, data: np.ndarray) -> np.ndarray:

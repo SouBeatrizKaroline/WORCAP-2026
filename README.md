@@ -33,12 +33,17 @@ Código para baixar e carregar os dados da competição Kaggle
 - `resultados_pca_lstm.ipynb` — visualiza os resultados de treino do modelo
   PCA+LSTM (curvas de treino, comparação com os baselines, erro por horizonte de
   previsão, mapas espaciais de exemplo); lê os artefatos salvos em
-  `experiments/pca_lstm_run1/`, sem reprocessar os dados nem re-treinar.
-- `run_experiments.py` — treina em sequência as variações escolhidas do Modelo A
-  (`--models pca pls_concurrent pls_lagged`, padrão: todas), cada uma num processo
-  separado; ao final salva/imprime um resumo comparando RMSE/MAE
-  (`experiments/run_all_summary.json`). Se uma variação falhar, as outras
-  continuam (a menos que `--stop-on-error` seja passado).
+  `models/pca_lstm_run1/`, sem reprocessar os dados nem re-treinar.
+- `run_all_models.py` — treina em sequência os modelos/variações disponíveis
+  (registro em `MODEL_RUNNERS`; hoje só o Modelo A, com `--variations pca
+  pls_concurrent pls_lagged`, padrão: todas), cada um num processo separado; ao
+  final salva/imprime um resumo comparando RMSE/MAE (`models/run_all_summary.json`).
+  Se uma variação falhar, as outras continuam (a menos que `--stop-on-error` seja
+  passado).
+- `run_hparam_sweep.py` — sweep em grade (produto cartesiano) de hiperparâmetros
+  (`--lrs`/`--hidden-sizes`/`--dropouts`) para um método de redução do Modelo A
+  (`--method`, padrão: o de melhor RMSE em `models/run_all_summary.json`); cada
+  combinação salva seus artefatos em `models/hparam_sweep/`.
 
 ### Pipeline de modelagem (`src/`)
 
@@ -51,30 +56,36 @@ Código para baixar e carregar os dados da competição Kaggle
   de previsão).
 - `src/submit.py` — formata a previsão final no formato exigido pelo Kaggle
   (arquivos em `submissions/`).
-- `src/train_pca_lstm.py` — script principal do **Modelo A**: reduz cada
-  variável espacialmente (PCA ou PLS — ver `--reduction`), treina o LSTM
-  hindcast/forecast com validação interna (early stopping), compara com os
-  baselines, retreina com todo o histórico rotulado e gera a submissão real.
-  Aceita `--reduction {pca,pls_concurrent,pls_lagged}` para comparar PCA
-  (não-supervisionado) contra PLS (supervisionado, com `tp` como alvo — no
-  mesmo mês ou defasado, via `--pls-lag-shift`); cada método salva seus
-  artefatos numa pasta separada em `experiments/`. Faz backup do progresso a
-  cada época (checkpoint do modelo + `history.csv`, tanto na seleção de épocas
-  quanto no retreino final) e loga tudo em `train.log` dentro da pasta do run —
-  se o processo cair no meio, o treino já feito não se perde (não há retomada
-  automática, é preciso rodar de novo).
-- `src/models/pca_lstm.py` — arquitetura do Modelo A: `SpatialPCA` (redução
-  espacial via PCA), `SpatialPLS` (redução espacial via PLS, supervisionada
-  pelos componentes PCA de `tp`) e `HindcastForecastLSTM` (encoder LSTM +
-  decoder condicionado no mês alvo, na última observação real e no lag).
+- `src/models/pca_lstm/train.py` (rode com `python3 -m src.models.pca_lstm.train`)
+  — script principal do **Modelo A**: reduz cada variável espacialmente (PCA ou
+  PLS — ver `--reduction`), treina o LSTM hindcast/forecast com validação
+  interna (early stopping), compara com os baselines, retreina com todo o
+  histórico rotulado e gera a submissão real. Aceita `--reduction
+  {pca,pls_concurrent,pls_lagged}` para comparar PCA (não-supervisionado)
+  contra PLS (supervisionado, com `tp` como alvo — no mesmo mês ou defasado,
+  via `--pls-lag-shift`), além de `--lr`/`--hidden-size`/`--dropout`/`--run-dir`
+  para variar hiperparâmetros; cada combinação salva seus artefatos numa pasta
+  separada em `models/`. Faz backup do progresso a cada época (checkpoint do
+  modelo + `history.csv`, tanto na seleção de épocas quanto no retreino final)
+  e loga tudo em `train.log` dentro da pasta do run — se o processo cair no
+  meio, o treino já feito não se perde (não há retomada automática, é preciso
+  rodar de novo).
+- `src/models/pca_lstm/model.py` — arquitetura do Modelo A: `SpatialPCA`
+  (redução espacial via PCA, mantendo o menor nº de componentes que atinja 90%
+  de variância explicada), `SpatialPLS` (idem via PLS, supervisionada pelos
+  componentes PCA de `tp` — busca binária pelo menor nº de componentes já que o
+  sklearn não expõe a variância explicada por k componentes do PLS num só fit)
+  e `HindcastForecastLSTM` (encoder LSTM + decoder condicionado no mês alvo, na
+  última observação real e no lag).
 - `src/models/convlstm.py` — esqueleto do **Modelo B** (ConvLSTM), ainda por
-  implementar.
+  implementar (há uma implementação funcional na branch `Beatriz`, ainda sem
+  script de treino).
 
 ### Configuração e resultados (gerados, não totalmente versionados)
 
 - `configs/pca_lstm.yaml`, `configs/convlstm.yaml` — hiperparâmetros de cada
   modelo.
-- `experiments/` — artefatos de cada rodada de treino (histórico de épocas,
+- `models/` — artefatos de cada rodada de treino (histórico de épocas,
   métricas, grades de amostra ficam versionados; checkpoints de modelo e
   objetos PCA não — ver `.gitignore`).
 - `submissions/` — arquivos de submissão gerados por `src/submit.py` (não

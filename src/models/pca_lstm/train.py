@@ -1,9 +1,12 @@
 """Treina o Modelo A (PCA/EOF ou PLS + LSTM hindcast/forecast) e gera a previsao/submissao.
 
 Uso (a partir da raiz do repositorio):
-    python3 -m src.train_pca_lstm                            # PCA (padrao)
-    python3 -m src.train_pca_lstm --reduction pls_concurrent  # PLS contra tp no mesmo mes
-    python3 -m src.train_pca_lstm --reduction pls_lagged      # PLS contra tp defasado
+    python3 -m src.models.pca_lstm.train                            # PCA (padrao)
+    python3 -m src.models.pca_lstm.train --reduction pls_concurrent  # PLS contra tp no mesmo mes
+    python3 -m src.models.pca_lstm.train --reduction pls_lagged      # PLS contra tp defasado
+    python3 -m src.models.pca_lstm.train --lr 5e-4 --hidden-size 256 --dropout 0.3 --run-dir models/meu_run
+        # hiperparametros do LSTM (--lr, --hidden-size, --dropout); --run-dir evita
+        # sobrescrever outra execucao do mesmo --reduction (ver run_hparam_sweep.py)
 
 Passos:
     1. Carrega os dados de treino (.nc, cache local do kagglehub) e do teste real.
@@ -18,7 +21,7 @@ Passos:
        a previsao para o teste real (2023-2024), salvando
        `submissions/submission_<reduction>_lstm.csv`.
 
-Cada metodo de reducao salva seus artefatos numa pasta separada em `experiments/`
+Cada metodo de reducao salva seus artefatos numa pasta separada em `models/`
 (ver RUN_DIRS), entao rodar os tres nao sobrescreve resultados anteriores - basta
 comparar os `metrics.json` de cada pasta para decidir qual reducao performou melhor.
 """
@@ -59,7 +62,9 @@ from src.evaluate import evaluate_predictions
 from src.models.pca_lstm import HindcastForecastLSTM, SpatialPCA, SpatialPLS
 from src.submit import build_submission
 
-N_COMPONENTS = 20
+VARIANCE_THRESHOLD = 0.90  # criterio de contribuicao minima: mantem o menor n_components que atinja isso
+PCA_MAX_COMPONENTS = 200  # teto de busca para SpatialPCA (ver SpatialPCA em src/models/pca_lstm.py)
+PLS_MAX_COMPONENTS = 100  # teto de busca (binaria) para SpatialPLS
 HIDDEN_SIZE = 128
 DROPOUT = 0.1
 LR = 1e-3
@@ -72,9 +77,9 @@ REDUCTION_METHODS = ("pca", "pls_concurrent", "pls_lagged")
 PLS_LAG_SHIFT = 1  # meses - so usado por "pls_lagged" (Y = tp em t+PLS_LAG_SHIFT)
 
 RUN_DIRS = {
-    "pca": "experiments/pca_lstm_run1",
-    "pls_concurrent": "experiments/pls_concurrent_lstm_run1",
-    "pls_lagged": "experiments/pls_lagged_lstm_run1",
+    "pca": "models/pca_lstm_run1",
+    "pls_concurrent": "models/pls_concurrent_lstm_run1",
+    "pls_lagged": "models/pls_lagged_lstm_run1",
 }
 
 
@@ -124,10 +129,10 @@ def fit_reduction_per_variable(
     normalizado_tp = (bruto_tp - media_tp) / desvio_tp
     del bruto_tp
 
-    pca_tp = SpatialPCA(n_components=N_COMPONENTS)
+    pca_tp = SpatialPCA(variance_threshold=VARIANCE_THRESHOLD, max_components=PCA_MAX_COMPONENTS)
     pca_tp.fit(normalizado_tp[: train_end_idx + 1])
     print(
-        f"  PCA[{TP_VAR}] (referencia): {N_COMPONENTS} componentes explicam "
+        f"  PCA[{TP_VAR}] (referencia): {pca_tp.n_components_} componentes explicam "
         f"{pca_tp.explained_variance_ratio():.1%} da variancia (treino interno)"
     )
     tp_components_full = pca_tp.transform(normalizado_tp).astype("float32")
@@ -143,17 +148,17 @@ def fit_reduction_per_variable(
         del bruto
 
         if method == "pca":
-            reducer = SpatialPCA(n_components=N_COMPONENTS)
+            reducer = SpatialPCA(variance_threshold=VARIANCE_THRESHOLD, max_components=PCA_MAX_COMPONENTS)
             reducer.fit(normalizado[: train_end_idx + 1])
         else:
             shift = pls_lag_shift if method == "pls_lagged" else 0
             x_fit = normalizado[: train_end_idx + 1 - shift]
             y_fit = tp_components_full[shift : train_end_idx + 1]
-            reducer = SpatialPLS(n_components=N_COMPONENTS)
+            reducer = SpatialPLS(variance_threshold=VARIANCE_THRESHOLD, max_components=PLS_MAX_COMPONENTS)
             reducer.fit(x_fit, y_fit)
 
         print(
-            f"  {method.upper()}[{var}]: {N_COMPONENTS} componentes explicam "
+            f"  {method.upper()}[{var}]: {reducer.n_components_} componentes explicam "
             f"{reducer.explained_variance_ratio():.1%} da variancia de X (treino interno)"
         )
 
@@ -176,16 +181,26 @@ def make_loader(hindcast, alvo_atm, tp_congelado, lag, y, batch_size, shuffle):
 
 
 def train_model(
-    train_loader, val_loader, n_features_hindcast, n_features_atm, n_components_tp, max_epochs, patience, run_dir
+    train_loader,
+    val_loader,
+    n_features_hindcast,
+    n_features_atm,
+    n_components_tp,
+    max_epochs,
+    patience,
+    run_dir,
+    hidden_size=HIDDEN_SIZE,
+    dropout=DROPOUT,
+    lr=LR,
 ):
     model = HindcastForecastLSTM(
         n_features_hindcast=n_features_hindcast,
         n_features_atm=n_features_atm,
         n_components_tp=n_components_tp,
-        hidden_size=HIDDEN_SIZE,
-        dropout=DROPOUT,
+        hidden_size=hidden_size,
+        dropout=dropout,
     ).to(DEVICE)
-    optimizer = torch.optim.Adam(model.parameters(), lr=LR)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     criterion = nn.MSELoss()
 
     best_val_loss = float("inf")
@@ -265,27 +280,38 @@ def reconstruct_tp(pca_tp: SpatialPCA, stats_tp: tuple[float, float], coeffs_nor
     return grid_normalizado * desvio + media
 
 
-def main(method: str = "pca", pls_lag_shift: int = PLS_LAG_SHIFT):
+def main(
+    method: str = "pca",
+    pls_lag_shift: int = PLS_LAG_SHIFT,
+    run_dir: str | None = None,
+    hidden_size: int = HIDDEN_SIZE,
+    dropout: float = DROPOUT,
+    lr: float = LR,
+):
     """Ponto de entrada publico: prepara a pasta do run e loga tudo (console + arquivo)
-    em `{run_dir}/train.log`, alem de delegar o treino de fato para `_train`."""
+    em `{run_dir}/train.log`, alem de delegar o treino de fato para `_train`.
+
+    `run_dir` e opcional: por padrao usa RUN_DIRS[method] (um run por metodo de
+    reducao), mas pode ser sobrescrito para nao colidir quando varias execucoes do
+    mesmo metodo rodam com hiperparametros diferentes (ver run_hparam_sweep.py)."""
     assert method in REDUCTION_METHODS, f"method invalido: {method} (esperado um de {REDUCTION_METHODS})"
-    run_dir = RUN_DIRS[method]
+    run_dir = run_dir or RUN_DIRS[method]
     os.makedirs(run_dir, exist_ok=True)
 
     log_path = f"{run_dir}/train.log"
     with open(log_path, "a") as log_file, contextlib.redirect_stdout(_Tee(sys.stdout, log_file)):
         print(f"\n{'=' * 70}\nnova execucao ({method}) em {pd.Timestamp.now()}\n{'=' * 70}")
-        return _train(method, pls_lag_shift, run_dir)
+        return _train(method, pls_lag_shift, run_dir, hidden_size, dropout, lr)
 
 
-def _train(method: str, pls_lag_shift: int, run_dir: str):
+def _train(method: str, pls_lag_shift: int, run_dir: str, hidden_size: int = HIDDEN_SIZE, dropout: float = DROPOUT, lr: float = LR):
     label_modelo = {
         "pca": "PCA+LSTM",
         "pls_concurrent": "PLS(concorrente)+LSTM",
         "pls_lagged": "PLS(defasado)+LSTM",
     }[method]
 
-    print(f"=== 0. Metodo de reducao dimensional: {method} ===")
+    print(f"=== 0. Metodo de reducao dimensional: {method} | hiperparametros: hidden_size={hidden_size} dropout={dropout} lr={lr} ===")
 
     print("=== 1. Carregando dados ===")
     datasets = load_all_datasets()
@@ -305,8 +331,9 @@ def _train(method: str, pls_lag_shift: int, run_dir: str):
         ds, stats, train_end_idx, method=method, pls_lag_shift=pls_lag_shift
     )
 
-    n_features_hindcast = N_COMPONENTS * len(ALL_VARS)
-    n_features_atm = N_COMPONENTS * len(FEATURE_VARS)
+    n_components_tp = reduction_objects[TP_VAR].n_components_
+    n_features_hindcast = sum(reduction_objects[v].n_components_ for v in ALL_VARS)
+    n_features_atm = sum(reduction_objects[v].n_components_ for v in FEATURE_VARS)
 
     print("\n=== 3. Montando exemplos (contrato origem + lag) ===")
     train_ex = build_examples(component_series, 0, train_end_idx, last_valid_idx=train_end_idx)
@@ -321,7 +348,17 @@ def _train(method: str, pls_lag_shift: int, run_dir: str):
     print("\n=== 4. Treinando (selecao de epocas via validacao interna) ===")
     t0 = time.time()
     model, best_epoch, best_val_loss, history = train_model(
-        train_loader, val_loader, n_features_hindcast, n_features_atm, N_COMPONENTS, MAX_EPOCHS, PATIENCE, run_dir
+        train_loader,
+        val_loader,
+        n_features_hindcast,
+        n_features_atm,
+        n_components_tp,
+        MAX_EPOCHS,
+        PATIENCE,
+        run_dir,
+        hidden_size=hidden_size,
+        dropout=dropout,
+        lr=lr,
     )
     print(f"  treino concluido em {time.time() - t0:.0f}s | melhor epoca: {best_epoch} | val MSE(pca): {best_val_loss:.4f}")
 
@@ -350,7 +387,7 @@ def _train(method: str, pls_lag_shift: int, run_dir: str):
     print(f"  Persistencia  RMSE={metrics_persist['rmse']:.3f}  MAE={metrics_persist['mae']:.3f}  (mm/dia)")
     print(f"  Climatologia  RMSE={metrics_clim['rmse']:.3f}  MAE={metrics_clim['mae']:.3f}  (mm/dia)")
 
-    print("\n=== 5b. Salvando artefatos para visualizacao (experiments/) ===")
+    print("\n=== 5b. Salvando artefatos para visualizacao (models/) ===")
     os.makedirs(run_dir, exist_ok=True)
 
     pd.DataFrame(history).to_csv(f"{run_dir}/history.csv", index=False)
@@ -359,6 +396,7 @@ def _train(method: str, pls_lag_shift: int, run_dir: str):
         json.dump(
             {
                 "reduction_method": method,
+                "hyperparams": {"hidden_size": hidden_size, "dropout": dropout, "lr": lr},
                 "best_epoch": best_epoch,
                 "best_val_loss_pca": best_val_loss,
                 "modelo": metrics_model,
@@ -392,11 +430,11 @@ def _train(method: str, pls_lag_shift: int, run_dir: str):
     final_model = HindcastForecastLSTM(
         n_features_hindcast=n_features_hindcast,
         n_features_atm=n_features_atm,
-        n_components_tp=N_COMPONENTS,
-        hidden_size=HIDDEN_SIZE,
-        dropout=DROPOUT,
+        n_components_tp=n_components_tp,
+        hidden_size=hidden_size,
+        dropout=dropout,
     ).to(DEVICE)
-    optimizer = torch.optim.Adam(final_model.parameters(), lr=LR)
+    optimizer = torch.optim.Adam(final_model.parameters(), lr=lr)
     criterion = nn.MSELoss()
     retrain_history = []
     for epoch in range(1, best_epoch + 1):
@@ -478,7 +516,11 @@ def _train(method: str, pls_lag_shift: int, run_dir: str):
     os.makedirs("submissions", exist_ok=True)
     competition_path = download_competition_data()
     sample_path = os.path.join(competition_path, "sample_submission.csv")
-    output_path = f"submissions/submission_{method}_lstm.csv"
+    # Tag da submissao: nome do metodo no caso padrao, ou o nome da pasta do run quando
+    # run_dir foi sobrescrito (ex.: varios hiperparametros do mesmo metodo, ver run_hparam_sweep.py) -
+    # evita colidir arquivos de submissao entre execucoes diferentes.
+    run_tag = method if run_dir == RUN_DIRS.get(method) else os.path.basename(os.path.normpath(run_dir))
+    output_path = f"submissions/submission_{run_tag}_lstm.csv"
     submission_df = build_submission(predictions_da, sample_path, output_path)
     print(f"  salvo em {output_path} ({len(submission_df)} linhas)")
 
@@ -503,9 +545,28 @@ def parse_args() -> argparse.Namespace:
         default=PLS_LAG_SHIFT,
         help="Meses de defasagem entre X e o alvo tp para --reduction pls_lagged (padrao: %(default)s).",
     )
+    parser.add_argument(
+        "--run-dir",
+        type=str,
+        default=None,
+        help="Pasta de saida dos artefatos (padrao: RUN_DIRS[--reduction]). Use para nao sobrescrever "
+        "outra execucao do mesmo metodo com hiperparametros diferentes (ver run_hparam_sweep.py).",
+    )
+    parser.add_argument(
+        "--hidden-size", type=int, default=HIDDEN_SIZE, help="Tamanho do hidden state do LSTM (padrao: %(default)s)."
+    )
+    parser.add_argument("--dropout", type=float, default=DROPOUT, help="Dropout do decoder (padrao: %(default)s).")
+    parser.add_argument("--lr", type=float, default=LR, help="Taxa de aprendizado do Adam (padrao: %(default)s).")
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
-    main(method=args.reduction, pls_lag_shift=args.pls_lag_shift)
+    main(
+        method=args.reduction,
+        pls_lag_shift=args.pls_lag_shift,
+        run_dir=args.run_dir,
+        hidden_size=args.hidden_size,
+        dropout=args.dropout,
+        lr=args.lr,
+    )
