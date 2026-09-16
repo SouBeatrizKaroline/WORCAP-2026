@@ -1,0 +1,26 @@
+[
+  {
+    "method": "pca",
+    "status": "ok",
+    "returncode": 0,
+    "duracao_s": 829.6,
+    "rmse": 1.56565260887146,
+    "mae": 0.9493640661239624
+  },
+  {
+    "method": "pls_concurrent",
+    "status": "ok",
+    "returncode": 0,
+    "duracao_s": 1702.9,
+    "rmse": 1.5465649366378784,
+    "mae": 0.9393736124038696
+  },
+  {
+    "method": "pls_lagged",
+    "status": "ok",
+    "returncode": 0,
+    "duracao_s": 1420.2,
+    "rmse": 1.569007396697998,
+    "mae": 0.9551924467086792
+  }
+]

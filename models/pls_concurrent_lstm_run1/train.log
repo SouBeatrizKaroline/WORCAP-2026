@@ -1,0 +1,152 @@
+
+======================================================================
+nova execucao (pls_concurrent) em 2026-09-16 01:12:47.373330
+======================================================================
+=== 0. Metodo de reducao dimensional: pls_concurrent ===
+=== 1. Carregando dados ===
+Dados ja baixados em cache, reaproveitando: /home/mazeeqe/.cache/kagglehub/competitions/previsao-climatica-de-precipitacao-sobre-a-america-do-sul
+Carregado 'sample_submission' (csv): 1885464 linhas x 2 colunas
+Carregado 'teste_features' (netcdf): dims=(time=24, lat=301, lon=261), variáveis=['t2', 'cloud_cover', 'shum_850', 'surface_pressure', 'u_850', 'v_850', 'temperature_850', 'rel_hum_850', 'geopotential_850', 'tp_alvo', 'tp_ultima_obs']
+Carregado 'treino_cloud_cover' (netcdf): dims=(time=996, lat=301, lon=261), variáveis=['cloud_cover']
+Carregado 'treino_geopotential_850' (netcdf): dims=(time=996, lat=301, lon=261), variáveis=['geopotential_850']
+Carregado 'treino_rel_hum_850' (netcdf): dims=(time=996, lat=301, lon=261), variáveis=['rel_hum_850']
+Carregado 'treino_shum_850' (netcdf): dims=(time=996, lat=301, lon=261), variáveis=['shum_850']
+Carregado 'treino_surface_pressure' (netcdf): dims=(time=996, lat=301, lon=261), variáveis=['surface_pressure']
+Carregado 'treino_t2' (netcdf): dims=(time=996, lat=301, lon=261), variáveis=['t2']
+Carregado 'treino_temperature_850' (netcdf): dims=(time=996, lat=301, lon=261), variáveis=['temperature_850']
+Carregado 'treino_tp' (netcdf): dims=(time=996, lat=301, lon=261), variáveis=['tp']
+Carregado 'treino_tp_alvo' (netcdf): dims=(time=996, lat=301, lon=261), variáveis=['tp_alvo']
+Carregado 'treino_u_850' (netcdf): dims=(time=996, lat=301, lon=261), variáveis=['u_850']
+Carregado 'treino_v_850' (netcdf): dims=(time=996, lat=301, lon=261), variáveis=['v_850']
+  996 meses (1940-01-01 a 2022-12-01)
+  origens de treino interno ate indice 947 (2018-12-01)
+  origens de validacao interna ate indice 995 (2022-12-01)
+
+=== 2. Reduzindo dimensionalidade por variavel (pls_concurrent, so no treino interno) ===
+  PCA[tp] (referencia): 20 componentes explicam 79.0% da variancia (treino interno)
+  PLS_CONCURRENT[t2]: 20 componentes explicam 95.6% da variancia de X (treino interno)
+  PLS_CONCURRENT[cloud_cover]: 20 componentes explicam 83.5% da variancia de X (treino interno)
+  PLS_CONCURRENT[shum_850]: 20 componentes explicam 90.9% da variancia de X (treino interno)
+  PLS_CONCURRENT[surface_pressure]: 20 componentes explicam 84.8% da variancia de X (treino interno)
+  PLS_CONCURRENT[u_850]: 20 componentes explicam 78.2% da variancia de X (treino interno)
+  PLS_CONCURRENT[v_850]: 20 componentes explicam 80.1% da variancia de X (treino interno)
+  PLS_CONCURRENT[temperature_850]: 20 componentes explicam 93.2% da variancia de X (treino interno)
+  PLS_CONCURRENT[rel_hum_850]: 20 componentes explicam 81.5% da variancia de X (treino interno)
+  PLS_CONCURRENT[geopotential_850]: 20 componentes explicam 77.7% da variancia de X (treino interno)
+
+=== 3. Montando exemplos (contrato origem + lag) ===
+  treino: 22188 exemplos | validacao: 852 exemplos
+
+=== 4. Treinando (selecao de epocas via validacao interna) ===
+  epoca  1/25 | treino MSE(pca) 252.7702 | val MSE(pca) 141.5359
+  epoca  2/25 | treino MSE(pca) 100.7291 | val MSE(pca) 124.1424
+  epoca  3/25 | treino MSE(pca) 85.5481 | val MSE(pca) 119.5096
+  epoca  4/25 | treino MSE(pca) 77.5548 | val MSE(pca) 117.2462
+  epoca  5/25 | treino MSE(pca) 72.5687 | val MSE(pca) 117.3015
+  epoca  6/25 | treino MSE(pca) 69.3705 | val MSE(pca) 116.0606
+  epoca  7/25 | treino MSE(pca) 66.3423 | val MSE(pca) 120.5871
+  epoca  8/25 | treino MSE(pca) 64.1965 | val MSE(pca) 118.2271
+  epoca  9/25 | treino MSE(pca) 62.4944 | val MSE(pca) 120.9225
+  epoca 10/25 | treino MSE(pca) 60.7517 | val MSE(pca) 121.9578
+  epoca 11/25 | treino MSE(pca) 60.1006 | val MSE(pca) 118.0409
+  early stopping na epoca 11 (melhor: 6)
+  treino concluido em 368s | melhor epoca: 6 | val MSE(pca): 116.0606
+
+=== 5. Avaliando contra baselines (grade real, mm/dia) ===
+  PLS(concorrente)+LSTM RMSE=1.547  MAE=0.939  (mm/dia)
+  Persistencia  RMSE=4.004  MAE=2.372  (mm/dia)
+  Climatologia  RMSE=1.891  MAE=1.137  (mm/dia)
+
+=== 5b. Salvando artefatos para visualizacao (experiments/) ===
+  history.csv, metrics.json e sample_grids.npz salvos em experiments/pls_concurrent_lstm_run1/
+
+=== 6. Retreinando com todo o historico rotulado (1940-2022) ===
+  epoca  1/6 | MSE(pca) 249.8407
+  epoca  2/6 | MSE(pca) 99.9187
+  epoca  3/6 | MSE(pca) 85.0128
+  epoca  4/6 | MSE(pca) 78.1896
+  epoca  5/6 | MSE(pca) 72.8936
+  epoca  6/6 | MSE(pca) 69.4816
+  modelo final e objetos de reducao salvos em experiments/pls_concurrent_lstm_run1/
+
+=== 7. Prevendo o teste real (2023-2024) ===
+
+=== 8. Gerando submissao ===
+Dados ja baixados em cache, reaproveitando: /home/mazeeqe/.cache/kagglehub/competitions/previsao-climatica-de-precipitacao-sobre-a-america-do-sul
+  salvo em submissions/submission_pls_concurrent_lstm.csv (1885464 linhas)
+
+======================================================================
+nova execucao (pls_concurrent) em 2026-09-16 13:29:32.568853
+======================================================================
+=== 0. Metodo de reducao dimensional: pls_concurrent | hiperparametros: hidden_size=128 dropout=0.1 lr=0.001 ===
+=== 1. Carregando dados ===
+Dados ja baixados em cache, reaproveitando: /home/mazeeqe/.cache/kagglehub/competitions/previsao-climatica-de-precipitacao-sobre-a-america-do-sul
+Carregado 'sample_submission' (csv): 1885464 linhas x 2 colunas
+Carregado 'teste_features' (netcdf): dims=(time=24, lat=301, lon=261), variáveis=['t2', 'cloud_cover', 'shum_850', 'surface_pressure', 'u_850', 'v_850', 'temperature_850', 'rel_hum_850', 'geopotential_850', 'tp_alvo', 'tp_ultima_obs']
+Carregado 'treino_cloud_cover' (netcdf): dims=(time=996, lat=301, lon=261), variáveis=['cloud_cover']
+Carregado 'treino_geopotential_850' (netcdf): dims=(time=996, lat=301, lon=261), variáveis=['geopotential_850']
+Carregado 'treino_rel_hum_850' (netcdf): dims=(time=996, lat=301, lon=261), variáveis=['rel_hum_850']
+Carregado 'treino_shum_850' (netcdf): dims=(time=996, lat=301, lon=261), variáveis=['shum_850']
+Carregado 'treino_surface_pressure' (netcdf): dims=(time=996, lat=301, lon=261), variáveis=['surface_pressure']
+Carregado 'treino_t2' (netcdf): dims=(time=996, lat=301, lon=261), variáveis=['t2']
+Carregado 'treino_temperature_850' (netcdf): dims=(time=996, lat=301, lon=261), variáveis=['temperature_850']
+Carregado 'treino_tp' (netcdf): dims=(time=996, lat=301, lon=261), variáveis=['tp']
+Carregado 'treino_tp_alvo' (netcdf): dims=(time=996, lat=301, lon=261), variáveis=['tp_alvo']
+Carregado 'treino_u_850' (netcdf): dims=(time=996, lat=301, lon=261), variáveis=['u_850']
+Carregado 'treino_v_850' (netcdf): dims=(time=996, lat=301, lon=261), variáveis=['v_850']
+  996 meses (1940-01-01 a 2022-12-01)
+  origens de treino interno ate indice 947 (2018-12-01)
+  origens de validacao interna ate indice 995 (2022-12-01)
+
+=== 2. Reduzindo dimensionalidade por variavel (pls_concurrent, so no treino interno) ===
+  PCA[tp] (referencia): 85 componentes explicam 90.0% da variancia (treino interno)
+  PLS_CONCURRENT[t2]: 4 componentes explicam 90.8% da variancia de X (treino interno)
+    aviso: PLS nao atingiu 90% de variancia de X mesmo com max_components=30 (alcancado: 86.9%); usando 30 componentes
+  PLS_CONCURRENT[cloud_cover]: 30 componentes explicam 86.9% da variancia de X (treino interno)
+  PLS_CONCURRENT[shum_850]: 17 componentes explicam 90.3% da variancia de X (treino interno)
+    aviso: PLS nao atingiu 90% de variancia de X mesmo com max_components=30 (alcancado: 85.7%); usando 30 componentes
+  PLS_CONCURRENT[surface_pressure]: 30 componentes explicam 85.7% da variancia de X (treino interno)
+    aviso: PLS nao atingiu 90% de variancia de X mesmo com max_components=30 (alcancado: 81.6%); usando 30 componentes
+  PLS_CONCURRENT[u_850]: 30 componentes explicam 81.6% da variancia de X (treino interno)
+    aviso: PLS nao atingiu 90% de variancia de X mesmo com max_components=30 (alcancado: 83.9%); usando 30 componentes
+  PLS_CONCURRENT[v_850]: 30 componentes explicam 83.9% da variancia de X (treino interno)
+  PLS_CONCURRENT[temperature_850]: 8 componentes explicam 90.1% da variancia de X (treino interno)
+    aviso: PLS nao atingiu 90% de variancia de X mesmo com max_components=30 (alcancado: 84.8%); usando 30 componentes
+  PLS_CONCURRENT[rel_hum_850]: 30 componentes explicam 84.8% da variancia de X (treino interno)
+    aviso: PLS nao atingiu 90% de variancia de X mesmo com max_components=30 (alcancado: 78.4%); usando 30 componentes
+  PLS_CONCURRENT[geopotential_850]: 30 componentes explicam 78.4% da variancia de X (treino interno)
+
+=== 3. Montando exemplos (contrato origem + lag) ===
+  treino: 22188 exemplos | validacao: 852 exemplos
+
+=== 4. Treinando (selecao de epocas via validacao interna) ===
+  epoca  1/25 | treino MSE(pca) 110.6176 | val MSE(pca) 70.2507
+  epoca  2/25 | treino MSE(pca) 60.4331 | val MSE(pca) 66.1793
+  epoca  3/25 | treino MSE(pca) 54.3776 | val MSE(pca) 64.9843
+  epoca  4/25 | treino MSE(pca) 51.3822 | val MSE(pca) 66.0590
+  epoca  5/25 | treino MSE(pca) 49.1366 | val MSE(pca) 65.0563
+  epoca  6/25 | treino MSE(pca) 47.6986 | val MSE(pca) 66.6195
+  epoca  7/25 | treino MSE(pca) 46.4639 | val MSE(pca) 67.1366
+  epoca  8/25 | treino MSE(pca) 45.6321 | val MSE(pca) 66.5494
+  early stopping na epoca 8 (melhor: 3)
+  treino concluido em 295s | melhor epoca: 3 | val MSE(pca): 64.9843
+
+=== 5. Avaliando contra baselines (grade real, mm/dia) ===
+  PLS(concorrente)+LSTM RMSE=1.492  MAE=0.890  (mm/dia)
+  Persistencia  RMSE=4.004  MAE=2.372  (mm/dia)
+  Climatologia  RMSE=1.891  MAE=1.137  (mm/dia)
+
+=== 5b. Salvando artefatos para visualizacao (models/) ===
+  history.csv, metrics.json e sample_grids.npz salvos em models/pls_concurrent_lstm_run1/
+
+=== 6. Retreinando com todo o historico rotulado (1940-2022) ===
+  epoca  1/3 | MSE(pca) 108.4076
+  epoca  2/3 | MSE(pca) 59.8892
+  epoca  3/3 | MSE(pca) 54.1663
+  modelo final e objetos de reducao salvos em models/pls_concurrent_lstm_run1/
+
+=== 7. Prevendo o teste real (2023-2024) ===
+
+=== 8. Gerando submissao ===
+Dados ja baixados em cache, reaproveitando: /home/mazeeqe/.cache/kagglehub/competitions/previsao-climatica-de-precipitacao-sobre-a-america-do-sul
+  salvo em submissions/submission_pls_concurrent_lstm.csv (1885464 linhas)

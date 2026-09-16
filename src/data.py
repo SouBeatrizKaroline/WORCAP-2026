@@ -13,7 +13,7 @@ evita ambiguidade de indice e permite gerar qualquer lag a partir de uma unica s
 
 A grade e grande (301 lat x 261 lon = 78.561 pontos), entao este modulo nao acha
 a grade em (X, y) por ponto - ele so faz o alinhamento/normalizacao no espaco
-original. A reducao dimensional (PCA/EOF) e feita em `src/models/pca_lstm.py`, e
+original. A reducao dimensional (PCA/EOF) e feita em `src/models/pca_lstm/model.py`, e
 `build_examples` (abaixo) opera sobre as series de coeficientes PCA ja reduzidas,
 nao sobre a grade completa.
 """

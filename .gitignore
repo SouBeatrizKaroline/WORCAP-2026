@@ -12,11 +12,11 @@ data/
 eda_output/
 
 # Checkpoints de modelo e objetos PCA (grandes/binarios, cada um regenera com
-# python3 -m src.train_pca_lstm) - historico/metricas/grades de amostra ficam
-# versionados em experiments/ para o notebook de resultados nao depender de retreino
-experiments/**/*.pt
-experiments/**/*.joblib
-!experiments/**/*.csv
+# python3 -m src.models.pca_lstm.train) - historico/metricas/grades de amostra ficam
+# versionados em models/ para o notebook de resultados nao depender de retreino
+models/**/*.pt
+models/**/*.joblib
+!models/**/*.csv
 
 # Python
 __pycache__/

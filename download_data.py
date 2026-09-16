@@ -17,12 +17,28 @@ import os
 import kagglehub
 import pandas as pd
 import xarray as xr
+from kagglehub.cache import Cache
+from kagglehub.handle import parse_competition_handle
 
 COMPETITION = "previsao-climatica-de-precipitacao-sobre-a-america-do-sul"
 
 
+def _cached_competition_path(competition: str) -> str | None:
+    """Verifica so localmente (sem chamar a API do Kaggle) se o bundle da competicao
+    ja esta baixado e completo, usando o mesmo cache/marcador que o kagglehub usa
+    internamente. Retorna o path se sim, ou None se precisa baixar."""
+    handle = parse_competition_handle(competition)
+    return Cache().load_from_cache(handle, None)
+
+
 def download_competition_data(competition: str = COMPETITION) -> str:
-    """Baixa (ou reaproveita o cache local) os arquivos da competição e retorna o path."""
+    """Reaproveita o cache local se ja estiver completo (sem tocar na rede); caso
+    contrario, baixa (via kagglehub) os arquivos da competicao. Retorna o path."""
+    cached_path = _cached_competition_path(competition)
+    if cached_path:
+        print(f"Dados ja baixados em cache, reaproveitando: {cached_path}")
+        return cached_path
+
     path = kagglehub.competition_download(competition)
     print(f"Path to competition files: {path}")
     return path

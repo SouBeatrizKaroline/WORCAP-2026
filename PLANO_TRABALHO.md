@@ -54,7 +54,7 @@ Antes de codar em paralelo, combinar por escrito (evita retrabalho e conflito de
 
 ## Fase 2 — Desenvolvimento dos modelos (P2 e P3, em paralelo)
 
-**P2 — PCA/EOF + LSTM** (`src/models/pca_lstm.py`)
+**P2 — PCA/EOF + LSTM** (`src/models/pca_lstm/`)
 - Ajustar PCA (ou `IncrementalPCA`) por variável, só com dados de treino; reter componentes
   suficientes para ~90–95% da variância.
 - LSTM hindcast (janela histórica) → vetor de contexto → decoder condicionado em
@@ -75,7 +75,7 @@ Ambos devem consumir os dados via `src/data.py` e reportar métricas via `src/ev
   nº de camadas, dropout, learning rate.
 - **ConvLSTM**: nº de filtros, tamanho de kernel, nº de camadas, learning rate, batch size.
 - Ferramenta leve para não perder tempo de hackathon: grid/random search manual com log em
-  CSV (`experiments/`), ou Optuna se alguém já tiver familiaridade.
+  CSV (`models/`), ou Optuna se alguém já tiver familiaridade.
 - Critério de seleção: erro na validação temporal (nunca no teste).
 
 ## Fase 4 — Comparação, ensemble e submissão (todos)
@@ -98,12 +98,14 @@ worcap_2026/
 │   ├── evaluate.py          (métrica comum — P1)
 │   ├── submit.py            (gera submission.csv — P1)
 │   └── models/
-│       ├── pca_lstm.py      (P2)
+│       ├── pca_lstm/        (P2)
+│       │   ├── model.py     (SpatialPCA/SpatialPLS/HindcastForecastLSTM)
+│       │   └── train.py     (script de treino, python3 -m src.models.pca_lstm.train)
 │       └── convlstm.py      (P3)
 ├── configs/
 │   ├── pca_lstm.yaml
 │   └── convlstm.yaml
-└── experiments/             (logs/resultados de cada rodada de tuning)
+└── models/                  (logs/resultados de cada rodada de tuning)
 ```
 
 ## Git
